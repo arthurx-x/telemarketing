@@ -1,47 +1,31 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 
 def load_excel(file, skiprows=0):
+    """Load an Excel file into a DataFrame."""
     return pd.read_excel(file, skiprows=skiprows)
 
-def process_order_all(df):
-    columns = {
-        'ID do pedido': 'ID Pedido',
-        'Nome do Produto': 'Nome do Produto',
-        'Número de referência SKU': 'Número de referência SKU',
-        'Preço acordado': 'Preço acordado',
-        'Quantidade': 'Quantidade'
-    }
+def process_dataframe(df, columns, add_total=False):
+    """Rename columns in the DataFrame and optionally add a 'Total do Pedido' column."""
     df = df.rename(columns={old: new for old, new in columns.items() if old in df.columns})
-    df['Total Pedido'] = df['Preço acordado'] * df['Quantidade']
-    return df[columns.values()]
-
-def process_shopeepay(df):
-    columns = {
-        'ID do pedido': 'ID Pedido',
-        'Valor': 'Valor Recebido'
-    }
-    return df.rename(columns=columns)[columns.values()]
-
-def merge_data(order_df, shopeepay_df, precos_df):
-    merged = pd.merge(order_df, shopeepay_df, on='ID Pedido', how='left')
-    merged = pd.merge(merged, precos_df, left_on='Número de referência SKU', right_on='SKU_Produto', how='left')
-    
-    column_order = ['ID Pedido', 'Nome do Produto', 'Número de referência SKU', 'SKU_Produto', 
-                    'Preço acordado', 'Quantidade', 'Total Pedido', 'Valor Recebido', 
-                    'Custo_Produto', 'Embalagem']
-    
-    return merged[[col for col in column_order if col in merged.columns]]
-
-def calculate_additional_columns(df):
-    df['Custo_Total'] = ((df['Preço acordado'] * df['Quantidade']) - df['Valor Recebido']) + df['Custo_Produto'] + df['Embalagem']
-    df['Custo %'] = (100 / (df['Preço acordado'] * df['Quantidade'])) * df['Custo_Total']
-    df['Lucro'] = df['Valor Recebido'] - df['Custo_Produto'] - df['Embalagem']
-    df['Lucro %'] = (100 / (df['Preço acordado'] * df['Quantidade'])) * df['Lucro']
+    if add_total and 'Preço acordado' in df.columns and 'Quantidade' in df.columns:
+        df['Total do Pedido'] = df['Preço acordado'] * df['Quantidade']
     return df
 
+def merge_dataframes(order_df, shopeepay_df, precos_df):
+    """Merge the order, ShopeePay, and price DataFrames into a single DataFrame and calculate profit."""
+    merged_df = pd.merge(order_df, shopeepay_df, on='ID Pedido', how='left')
+    merged_df = pd.merge(merged_df, precos_df, left_on='Número de referência SKU', right_on='SKU_Produto', how='left')
+    merged_df['Lucro'] = merged_df['Valor Recebido'] - merged_df['Custo_Produto'] - merged_df['Embalagem']
+    return merged_df
+
+def display_dataframe(df):
+    """Display the DataFrame excluding the 'Número de referência SKU' column."""
+    return df.drop(columns=['Número de referência SKU'], errors='ignore')
+
 def main():
-    st.title("Processador de Arquivos Excel com Dados Mesclados e Cálculos Adicionais")
+    st.title("Processador de Arquivos Excel com Dados Mesclados")
 
     files = {
         'Order.all': st.file_uploader("Upload arquivo Order.all", type="xlsx", key="order"),
@@ -51,43 +35,60 @@ def main():
 
     if all(files.values()):
         try:
-            order_df = process_order_all(load_excel(files['Order.all']))
-            shopeepay_df = process_shopeepay(load_excel(files['ShopeePay'], skiprows=17))
+            order_df = process_dataframe(load_excel(files['Order.all']), {
+                'ID do pedido': 'ID Pedido',
+                'Data de criação do pedido': 'Data de criação do pedido',
+                'Nome do Produto': 'Nome do Produto',
+                'Número de referência SKU': 'Número de referência SKU',
+                'Preço acordado': 'Preço acordado',
+                'Quantidade': 'Quantidade'
+            }, add_total=True)
+            
+            shopeepay_df = process_dataframe(load_excel(files['ShopeePay'], skiprows=17), {
+                'ID do pedido': 'ID Pedido',
+                'Valor': 'Valor Recebido'
+            })
+            
             precos_df = load_excel(files['Preços'])
 
-            merged_df = merge_data(order_df, shopeepay_df, precos_df)
-            calculated_df = calculate_additional_columns(merged_df.copy())
+            merged_df = merge_dataframes(order_df, shopeepay_df, precos_df)
+            columns_to_display = ['ID Pedido', 'Data de criação do pedido', 'Nome do Produto', 'SKU_Produto', 
+                                  'Preço acordado', 'Quantidade', 'Custo_Produto', 'Embalagem', 
+                                  'Total do Pedido', 'Valor Recebido', 'Lucro']
+            merged_df = merged_df[[col for col in columns_to_display if col in merged_df.columns]]
 
-            st.subheader("Dados Mesclados e Calculados")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.write("Tabela Original")
-                st.dataframe(merged_df)
+            st.subheader("Dados Mesclados de Todos os Arquivos")
+            st.dataframe(display_dataframe(merged_df))
 
-            with col2:
-                st.write("Tabela com Cálculos Adicionais")
-                st.dataframe(calculated_df[['ID Pedido', 'Custo_Total', 'Custo %', 'Lucro', 'Lucro %']])
-
-            # Calculando e exibindo a soma do Custo Total e do Lucro
-            soma_custo_total = calculated_df['Custo_Total'].sum()
-            soma_lucro = calculated_df['Lucro'].sum()
-
-            st.subheader("Resumo Financeiro")
-            col3, col4 = st.columns(2)
-            with col3:
-                st.metric("Soma do Custo Total", f"R$ {soma_custo_total:.2f}")
-            with col4:
-                st.metric("Soma do Lucro", f"R$ {soma_lucro:.2f}")
-
-            csv = calculated_df.to_csv(index=False)
+            csv = merged_df.to_csv(index=False)
             st.download_button(
-                label="Baixar dados completos como CSV",
+                label="Baixar dados mesclados como CSV",
                 data=csv,
-                file_name="merged_and_calculated_data.csv",
+                file_name="merged_data.csv",
                 mime="text/csv",
             )
+
+            st.subheader("Soma dos Valores")
+            total_pedido_sum = merged_df['Total do Pedido'].sum()
+            valor_recebido_sum = merged_df['Valor Recebido'].sum()
+            lucro_sum = merged_df['Lucro'].sum()
+
+            st.write(f"Soma do Total do Pedido: {total_pedido_sum:.2f}")
+            st.write(f"Soma do Valor Recebido: {valor_recebido_sum:.2f}")
+            st.write(f"Soma do Lucro: {lucro_sum:.2f}")
+
+            # Adicionando gráficos
+            st.subheader("Visualizações Gráficas")
+
+            fig_total = px.bar(merged_df, x='ID Pedido', y='Total do Pedido', title='Total do Pedido por ID')
+            st.plotly_chart(fig_total)
+
+            fig_valor = px.bar(merged_df, x='ID Pedido', y='Valor Recebido', title='Valor Recebido por ID')
+            st.plotly_chart(fig_valor)
+
+            fig_lucro = px.bar(merged_df, x='ID Pedido', y='Lucro', title='Lucro por ID')
+            st.plotly_chart(fig_lucro)
+
         except Exception as e:
             st.error(f"Erro ao processar os arquivos: {str(e)}")
     else:
