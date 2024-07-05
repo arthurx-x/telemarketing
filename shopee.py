@@ -1,53 +1,47 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from typing import Dict, Any
 
-@st.cache_data
-def load_excel(file: Any, skiprows: int = 0) -> pd.DataFrame:
+def load_excel(file, skiprows=0):
     return pd.read_excel(file, skiprows=skiprows)
 
-def process_dataframes(order_df: pd.DataFrame, shopeepay_df: pd.DataFrame, precos_df: pd.DataFrame) -> pd.DataFrame:
-    # Renomear colunas
-    column_mapping = {
+def process_order_all(df):
+    columns = {
         'ID do pedido': 'ID Pedido',
         'Nome do Produto': 'Nome do Produto',
-        'Número de referência SKU': 'SKU',
-        'Preço acordado': 'Preço Acordado',
-        'Quantidade': 'Quantidade',
+        'Número de referência SKU': 'Número de referência SKU',
+        'Preço acordado': 'Preço acordado',
+        'Quantidade': 'Quantidade'
+    }
+    df = df.rename(columns={old: new for old, new in columns.items() if old in df.columns})
+    df['Total Pedido'] = df['Preço acordado'] * df['Quantidade']
+    return df[columns.values()]
+
+def process_shopeepay(df):
+    columns = {
+        'ID do pedido': 'ID Pedido',
         'Valor': 'Valor Recebido'
     }
-    order_df = order_df.rename(columns=column_mapping)
-    shopeepay_df = shopeepay_df.rename(columns=column_mapping)
+    return df.rename(columns=columns)[columns.values()]
 
-    # Mesclar dataframes
-    df = pd.merge(order_df, shopeepay_df[['ID Pedido', 'Valor Recebido']], on='ID Pedido', how='left')
-    df = pd.merge(df, precos_df, left_on='SKU', right_on='SKU_Produto', how='left')
+def merge_data(order_df, shopeepay_df, precos_df):
+    merged = pd.merge(order_df, shopeepay_df, on='ID Pedido', how='left')
+    merged = pd.merge(merged, precos_df, left_on='Número de referência SKU', right_on='SKU_Produto', how='left')
+    
+    column_order = ['ID Pedido', 'Nome do Produto', 'Número de referência SKU', 'SKU_Produto', 
+                    'Preço acordado', 'Quantidade', 'Total Pedido', 'Valor Recebido', 
+                    'Custo_Produto', 'Embalagem']
+    
+    return merged[[col for col in column_order if col in merged.columns]]
 
-    # Calcular colunas adicionais
-    df['Total Pedido'] = df['Preço Acordado'] * df['Quantidade']
-    df['Custo Total'] = df['Custo_Produto'] + df['Embalagem']
-    df['Lucro'] = df['Valor Recebido'] - df['Custo Total']
-    df['Margem (%)'] = (df['Lucro'] / df['Valor Recebido']) * 100
-
+def calculate_additional_columns(df):
+    df['Custo_Total'] = ((df['Preço acordado'] * df['Quantidade']) - df['Valor Recebido']) + df['Custo_Produto'] + df['Embalagem']
+    df['Custo %'] = (100 / (df['Preço acordado'] * df['Quantidade'])) * df['Custo_Total']
+    df['Lucro'] = df['Valor Recebido'] - df['Custo_Produto'] - df['Embalagem']
+    df['Lucro %'] = (100 / (df['Preço acordado'] * df['Quantidade'])) * df['Lucro']
     return df
 
-def create_summary(df: pd.DataFrame) -> Dict[str, float]:
-    return {
-        'Total Vendas': df['Valor Recebido'].sum(),
-        'Custo Total': df['Custo Total'].sum(),
-        'Lucro Total': df['Lucro'].sum(),
-        'Margem Média (%)': df['Margem (%)'].mean()
-    }
-
-def plot_top_products(df: pd.DataFrame, metric: str, top_n: int = 10) -> px.bar:
-    top_products = df.groupby('Nome do Produto')[metric].sum().nlargest(top_n).reset_index()
-    fig = px.bar(top_products, x='Nome do Produto', y=metric, title=f'Top {top_n} Produtos por {metric}')
-    return fig
-
 def main():
-    st.set_page_config(page_title="Dashboard de Vendas", layout="wide")
-    st.title("Dashboard de Análise de Vendas")
+    st.title("Processador de Arquivos Excel com Dados Mesclados e Cálculos Adicionais")
 
     files = {
         'Order.all': st.file_uploader("Upload arquivo Order.all", type="xlsx", key="order"),
@@ -57,32 +51,41 @@ def main():
 
     if all(files.values()):
         try:
-            order_df = load_excel(files['Order.all'])
-            shopeepay_df = load_excel(files['ShopeePay'], skiprows=17)
+            order_df = process_order_all(load_excel(files['Order.all']))
+            shopeepay_df = process_shopeepay(load_excel(files['ShopeePay'], skiprows=17))
             precos_df = load_excel(files['Preços'])
 
-            df = process_dataframes(order_df, shopeepay_df, precos_df)
+            merged_df = merge_data(order_df, shopeepay_df, precos_df)
+            calculated_df = calculate_additional_columns(merged_df.copy())
 
-            st.subheader("Dados Processados")
-            st.dataframe(df)
+            st.subheader("Dados Mesclados e Calculados")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("Tabela Original")
+                st.dataframe(merged_df)
 
-            summary = create_summary(df)
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Vendas", f"R$ {summary['Total Vendas']:,.2f}")
-            col2.metric("Custo Total", f"R$ {summary['Custo Total']:,.2f}")
-            col3.metric("Lucro Total", f"R$ {summary['Lucro Total']:,.2f}")
-            col4.metric("Margem Média", f"{summary['Margem Média (%)']:.2f}%")
+            with col2:
+                st.write("Tabela com Cálculos Adicionais")
+                st.dataframe(calculated_df[['ID Pedido', 'Custo_Total', 'Custo %', 'Lucro', 'Lucro %']])
 
-            st.subheader("Análise de Produtos")
-            metric = st.selectbox("Selecione a métrica", ['Valor Recebido', 'Quantidade', 'Lucro'])
-            fig = plot_top_products(df, metric)
-            st.plotly_chart(fig, use_container_width=True)
+            # Calculando e exibindo a soma do Custo Total e do Lucro
+            soma_custo_total = calculated_df['Custo_Total'].sum()
+            soma_lucro = calculated_df['Lucro'].sum()
 
-            csv = df.to_csv(index=False)
+            st.subheader("Resumo Financeiro")
+            col3, col4 = st.columns(2)
+            with col3:
+                st.metric("Soma do Custo Total", f"R$ {soma_custo_total:.2f}")
+            with col4:
+                st.metric("Soma do Lucro", f"R$ {soma_lucro:.2f}")
+
+            csv = calculated_df.to_csv(index=False)
             st.download_button(
-                label="Baixar dados como CSV",
+                label="Baixar dados completos como CSV",
                 data=csv,
-                file_name="dados_processados.csv",
+                file_name="merged_and_calculated_data.csv",
                 mime="text/csv",
             )
         except Exception as e:
