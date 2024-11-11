@@ -1,127 +1,89 @@
 import streamlit as st
 import pandas as pd
-from typing import Dict, Any
 
-# Constants
-COLUMN_MAPPING = {
-    'order': {
-        'ID do pedido': 'ID PEDIDO',
-        'Data de criação do pedido': 'DATA VENDA',
-        'Número de referência SKU': 'PRODUTO',
-        'Quantidade': 'QUANTIDADE',
-        'Preço acordado': 'PRECO'
-    },
-    'shopeepay': {
-        'ID do pedido': 'ID PEDIDO',
-        'Valor': 'VALOR RECEBIDO'
-    }
+COLUMN_MAPPINGS = {
+    "order.all": {'ID do pedido': 'ID do pedido_0', 'Data de criação': 'Data de criação do pedido', 
+                'Nome do produto': 'Nome do Produto', 'Número de referência': 'Número de referência SKU', 
+                'Preço acordado': 'Preço acordado', 'Quantidade': 'Quantidade'},
+    "shopeepay": {'ID do pedido': 'ID do pedido_61', 'Valor': 'Valor'},
+    "preços": {'Custo do Produto': 'Custo_Produto'}
 }
 
-FINAL_COLUMNS = ['DATA VENDA', 'ID PEDIDO', 'PRODUTO', 'QUANTIDADE', 'VALOR DA VENDA', 'VALOR DO PRODUTO', 'INSUMOS', 'VALOR RECEBIDO', 'SALDO']
+FINAL_COLUMNS = {
+    'ID do pedido_0': 'ID do pedido',
+    'Data de criação do pedido': 'Data de criação do pedido',
+    'Nome do Produto': 'Nome do Produto',
+    'Número de referência SKU': 'Número de referência SKU',
+    'Preço acordado': 'Preço',
+    'Quantidade': 'Quantidade',
+    'TOTAL VENDA': 'Valor Total',
+    'Custo_Produto': 'CUSTO',
+    'CUSTO TOTAL': 'CUSTO TOTAL',
+    'Valor': 'RECEBIDO',
+    'LIQUIDO': 'LIQUIDO'
+}
 
-def load_and_process_data(files: Dict[str, Any]) -> pd.DataFrame:
-    try:
-        dfs = {
-            'order': pd.read_excel(files['order']),
-            'shopeepay': pd.read_excel(files['shopeepay'], skiprows=17),
-            'precos': pd.read_excel(files['precos'])
-        }
+def read_file(file, skip_rows=None):
+    return pd.read_csv(file, skiprows=skip_rows) if file.name.endswith('.csv') else pd.read_excel(file, skiprows=skip_rows)
 
-        # Process order DataFrame
-        order_df = dfs['order'].rename(columns=COLUMN_MAPPING['order'])
-        order_df['VALOR DA VENDA'] = order_df['PRECO'] * order_df['QUANTIDADE']
-        order_df['DATA VENDA'] = pd.to_datetime(order_df['DATA VENDA']).dt.date
-
-        # Process shopeepay DataFrame
-        shopeepay_df = dfs['shopeepay'].rename(columns=COLUMN_MAPPING['shopeepay'])
-
-        # Merge DataFrames
-        merged_df = pd.merge(order_df, shopeepay_df, on='ID PEDIDO', how='left')
-        merged_df = pd.merge(merged_df, dfs['precos'], left_on='PRODUTO', right_on='SKU_Produto', how='left')
-
-        # Calculate SALDO and finalize DataFrame
-        merged_df['SALDO'] = merged_df['VALOR RECEBIDO'] - ((merged_df['Custo_Produto'] * merged_df['QUANTIDADE']) + merged_df['Embalagem'])
-        merged_df = merged_df.rename(columns={'Custo_Produto': 'VALOR DO PRODUTO', 'Embalagem': 'INSUMOS'})
-        
-        return merged_df[FINAL_COLUMNS].dropna(subset=['VALOR RECEBIDO'])
-    except KeyError as e:
-        raise ValueError(f"Coluna esperada não encontrada: {e}")
-    except Exception as e:
-        raise RuntimeError(f"Erro ao processar os dados: {e}")
-
-def calculate_summary(df: pd.DataFrame) -> tuple:
-    daily_summary = df.groupby('DATA VENDA').agg({
-        'VALOR DA VENDA': 'sum',
-        'SALDO': 'sum'
-    }).reset_index().rename(columns={
-        'DATA VENDA': 'Data',
-        'VALOR DA VENDA': 'Total Vendas',
-        'SALDO': 'Total Saldo'
-    })
+def create_result_card(value):
+    style = 'positive' if value > 0 else 'negative' if value < 0 else 'zero'
+    colors = {
+        'positive': ("rgba(220, 252, 231, 0.7)", "rgb(22, 163, 74)", "rgba(34, 197, 94, 0.3)"),
+        'negative': ("rgba(254, 226, 226, 0.7)", "rgb(220, 38, 38)", "rgba(248, 113, 113, 0.3)"),
+        'zero': ("rgba(241, 245, 249, 0.7)", "rgb(71, 85, 105)", "rgba(148, 163, 184, 0.3)")
+    }
+    bg, text, border = colors[style]
+    value_str = f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     
-    return daily_summary, df['VALOR DA VENDA'].sum(), df['SALDO'].sum()
+    return f"""
+        <div style="padding:1.5rem;border-radius:1rem;background-color:{bg};margin:1.5rem 0;text-align:center;
+                    box-shadow:0 4px 6px -1px {border},0 2px 4px -1px rgba(0,0,0,0.06);border:1px solid {border}">
+            <h3 style="margin:0;color:{text};font-size:1.2rem;font-weight:600;letter-spacing:0.025em;text-transform:uppercase">RESULTADO</h3>
+            <p style="margin:0.75rem 0 0 0;color:{text};font-size:2rem;font-weight:700;letter-spacing:-0.025em">{value_str}</p>
+        </div>"""
 
 def main():
-    st.set_page_config(layout="wide", page_title="Processador de Arquivos Excel")
-    
-    st.markdown("""
-        <style>
-        .main > div { padding-top: 2rem; }
-        .stApp { max-width: 100%; }
-        .block-container { padding: 1rem 1.5rem 0; }
-        .card { border-radius: 5px; padding: 20px; margin-bottom: 20px; height: 100%; }
-        .sales { background-color: #e6f3ff; color: #0066cc; }
-        .profit { background-color: #e6fff0; color: #006633; }
-        .loss { background-color: #ffe6e6; color: #cc0000; }
-        .big-font { font-size: 36px !important; font-weight: bold; }
-        .st-emotion-cache-1v0mbdj > img { display: none; }
-        .stDataFrame { width: 100%; height: calc(50vh - 200px); }
-        [data-testid="stHorizontalBlock"] { align-items: stretch; }
-        .upload-boxes { display: flex; gap: 10px; }
-        .upload-boxes > div { flex: 1; }
-        .dataframe-container table { width: 100% !important; }
-        .dataframe-container th:first-child, .dataframe-container td:first-child { display: none; }
-        </style>
-    """, unsafe_allow_html=True)
-
+    st.set_page_config(page_title="Concilia Shopee", layout="wide")
     st.title("Concilia Shopee")
+    
+    files = st.file_uploader("Adicione Order.all, ShopeePay, e Preços", accept_multiple_files=True)
+    if not files:
+        st.info("Adicione os 3 arquivos")
+        return
 
-    col1, col2, col3 = st.columns(3)
-    files = {
-        'order': col1.file_uploader("Upload arquivo Order.all", type="xlsx", key="order"),
-        'shopeepay': col2.file_uploader("Upload arquivo ShopeePay", type="xlsx", key="shopeepay"),
-        'precos': col3.file_uploader("Upload arquivo Preços", type="xlsx", key="precos")
-    }
+    try:
+        dfs = {}
+        for file in files:
+            for key in COLUMN_MAPPINGS:
+                if key.lower() in file.name.lower():
+                    skip_rows = 17 if "shopeepay" in key.lower() else None
+                    df = read_file(file, skip_rows)
+                    dfs[key] = df.rename(columns=COLUMN_MAPPINGS[key])
 
-    if all(files.values()):
-        try:
-            merged_df = load_and_process_data(files)
-            daily_summary, total_sales, total_profit = calculate_summary(merged_df)
+        if len(dfs) != 3:
+            st.warning("Faltam arquivos")
+            return
 
-            st.header("Resumo Mensal")
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.dataframe(daily_summary, use_container_width=True, hide_index=True)
-            with col2:
-                profit_class = "profit" if total_profit >= 0 else "loss"
-                st.markdown(f"""
-                    <div class="card sales">
-                        <h3>Total Vendas</h3>
-                        <p class="big-font">R$ {total_sales:,.2f}</p>
-                    </div>
-                    <div class="card {profit_class}">
-                        <h3>Total Saldo</h3>
-                        <p class="big-font">R$ {total_profit:,.2f}</p>
-                    </div>
-                """, unsafe_allow_html=True)
+        merged_df = (pd.merge(dfs["order.all"], dfs["shopeepay"], 
+                            left_on='ID do pedido_0', right_on='ID do pedido_61')
+                    .merge(dfs["preços"], left_on='Número de referência SKU', 
+                        right_on='SKU', how='left'))
 
-            st.header("Dados Mesclados")
-            st.dataframe(merged_df, use_container_width=True, hide_index=True)
+        merged_df['Data de criação do pedido'] = pd.to_datetime(merged_df['Data de criação do pedido']).dt.date
+        merged_df['TOTAL VENDA'] = merged_df['Preço acordado'] * merged_df['Quantidade']
+        merged_df['CUSTO TOTAL'] = (merged_df['Custo_Produto'] * merged_df['Quantidade']) + 1
+        merged_df['LIQUIDO'] = merged_df['Valor'] - merged_df['CUSTO TOTAL']
 
-        except (ValueError, RuntimeError) as e:
-            st.error(str(e))
-    else:
-        st.info("Por favor, faça o upload de todos os três arquivos para continuar.")
+        result_df = merged_df[FINAL_COLUMNS.keys()].rename(columns=FINAL_COLUMNS)
+        
+        st.dataframe(result_df, use_container_width=True, hide_index=True)
+        st.markdown(create_result_card(result_df['LIQUIDO'].sum()), unsafe_allow_html=True)
+        st.download_button("Baixar resultados", result_df.to_csv(index=False), 
+                        "dados_concilia_shopee.csv", "text/csv")
+
+    except Exception as e:
+        st.error(f"Ocorreu um erro: {str(e)}")
 
 if __name__ == "__main__":
     main()
