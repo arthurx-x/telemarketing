@@ -5,7 +5,7 @@ COLUMN_MAPPINGS = {
     "order.all": {'ID do pedido': 'ID do pedido_0', 'Data de criação': 'Data de criação do pedido', 
                 'Nome do produto': 'Nome do Produto', 'Número de referência': 'Número de referência SKU', 
                 'Preço acordado': 'Preço acordado', 'Quantidade': 'Quantidade'},
-    "shopeepay": {'ID do pedido': 'ID do pedido_61', 'Valor': 'Valor'},
+    "my_balance": {'ID do pedido': 'ID do pedido_61', 'Valor': 'Valor'},
     "preços": {'Custo do Produto': 'Custo_Produto'}
 }
 
@@ -47,7 +47,7 @@ def main():
     st.set_page_config(page_title="Concilia Shopee", layout="wide")
     st.title("Concilia Shopee")
     
-    files = st.file_uploader("Adicione Order.all, ShopeePay, e Preços", accept_multiple_files=True)
+    files = st.file_uploader("Adicione Order.all, My_balance, e Preços", accept_multiple_files=True)
     if not files:
         st.info("Adicione os 3 arquivos")
         return
@@ -57,7 +57,7 @@ def main():
         for file in files:
             for key in COLUMN_MAPPINGS:
                 if key.lower() in file.name.lower():
-                    skip_rows = 17 if "shopeepay" in key.lower() else None
+                    skip_rows = 17 if "my_balance" in key.lower() else None
                     df = read_file(file, skip_rows)
                     dfs[key] = df.rename(columns=COLUMN_MAPPINGS[key])
 
@@ -65,7 +65,13 @@ def main():
             st.warning("Faltam arquivos")
             return
 
-        merged_df = (pd.merge(dfs["order.all"], dfs["shopeepay"], 
+        # Convert necessary columns to numeric
+        dfs["order.all"]['Preço acordado'] = pd.to_numeric(dfs["order.all"]['Preço acordado'], errors='coerce')
+        dfs["order.all"]['Quantidade'] = pd.to_numeric(dfs["order.all"]['Quantidade'], errors='coerce')
+        dfs["preços"]['Custo_Produto'] = pd.to_numeric(dfs["preços"]['Custo_Produto'], errors='coerce')
+        dfs["my_balance"]['Valor'] = pd.to_numeric(dfs["my_balance"]['Valor'], errors='coerce')
+
+        merged_df = (pd.merge(dfs["order.all"], dfs["my_balance"], 
                             left_on='ID do pedido_0', right_on='ID do pedido_61')
                     .merge(dfs["preços"], left_on='Número de referência SKU', 
                         right_on='SKU', how='left'))
